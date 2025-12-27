@@ -1,0 +1,82 @@
+Spill-Heavy Test: 4 Problems
+============================
+Registers: 8
+
+
+═══════════════════════════════════════════════
+Test 1: Small Dense (15 vars, 80% edges)
+═══════════════════════════════════════════════
+
+Graph: 15 vars, 86 edges
+
+🔹 Heuristic Greedy Coloring
+  Spills: 0
+  Time: 11934 ms
+
+🔹 Optimal LP Solver (with live status)
+
+  Spills: 0
+  Time: 12473 ms
+
+📊 Comparison:
+  Heuristic: 0 spills in 11934 ms
+  Optimal:   0 spills in 12473 ms
+
+═══════════════════════════════════════════════
+Test 2: Medium Sparse (25 vars, 40% edges)
+═══════════════════════════════════════════════
+
+Graph: 25 vars, 123 edges
+
+🔹 Heuristic Greedy Coloring
+  Spills: 0
+  Time: 35631 ms
+
+🔹 Optimal LP Solver (with live status)
+
+  Spills: 0
+  Time: 35359 ms
+
+📊 Comparison:
+  Heuristic: 0 spills in 35631 ms
+  Optimal:   0 spills in 35359 ms
+
+═══════════════════════════════════════════════
+Test 3: Medium Dense (20 vars, 70% edges)
+═══════════════════════════════════════════════
+
+Graph: 20 vars, 127 edges
+
+🔹 Heuristic Greedy Coloring
+  Spills: 0
+  Time: 38008 ms
+
+🔹 Optimal LP Solver (with live status)
+
+  Spills: 0
+  Time: 38719 ms
+
+📊 Comparison:
+  Heuristic: 0 spills in 38008 ms
+  Optimal:   0 spills in 38719 ms
+
+═══════════════════════════════════════════════
+Test 4: Large Sparse (30 vars, 30% edges)
+═══════════════════════════════════════════════
+
+Graph: 30 vars, 150 edges
+
+🔹 Heuristic Greedy Coloring
+  Spills: 0
+  Time: 64006 ms
+
+🔹 Optimal LP Solver (with live status)
+
+  Spills: 0
+  Time: 63001 ms
+
+📊 Comparison:
+  Heuristic: 0 spills in 64006 ms
+  Optimal:   0 spills in 63001 ms
+
+✅ All tests complete!

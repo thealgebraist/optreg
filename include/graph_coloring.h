@@ -38,11 +38,21 @@ public:
         const InterferenceGraph& graph
     );
     
+    enum class SolverType {
+        Newton,           // Auto (uses AMX if available, else Sparse)
+        Newton_AMX,       // Force AMX Sparse
+        Newton_AMXDense,  // Force AMX Dense (Cholesky LAPACK)
+        Newton_Sparse,    // Force Eigen Sparse
+        Newton_Dense,     // Force Eigen Dense
+        GradientDescent   // Heuristic GD
+    };
+
     // High-level interface: allocate registers optimally
     RegisterAllocation allocate_optimal(
         const ControlFlowGraph& cfg,
         const LivenessInfo& liveness,
-        const InterferenceGraph& graph
+        const InterferenceGraph& graph,
+        SolverType solver_type = SolverType::Newton
     );
 
 private:

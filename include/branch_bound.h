@@ -14,6 +14,7 @@ struct BBNode {
     uint32_t branching_var;      // variable to branch on
     bool fixed_to_zero;          // true if branching var fixed to 0
     uint32_t depth;              // depth in search tree
+    std::vector<std::pair<uint32_t, double>> fixed_constraints; // History of fixed variables
     
     // For priority queue (best-first search)
     bool operator<(const BBNode& other) const {
@@ -38,10 +39,15 @@ public:
     
     void set_tolerance(double tol) { tolerance_ = tol; }
     void set_max_nodes(uint32_t max_n) { max_nodes_ = max_n; }
+    using LinearBackend = InteriorPointSolver::LinearSolverBackend;
+    void set_linear_solver_backend(LinearBackend backend) { linear_backend_ = backend; }
+    void set_num_integer_vars(uint32_t n) { num_integer_vars_ = n; }
     
 private:
     double tolerance_;
     uint32_t max_nodes_;
+    uint32_t num_integer_vars_ = UINT32_MAX; // If UINT32_MAX, all vars are integer
+    LinearBackend linear_backend_ = LinearBackend::Auto;
     
     // Task 10: Solve LP relaxation
     LPSolution solve_lp_relaxation(

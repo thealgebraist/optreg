@@ -35,17 +35,40 @@ struct LPSolution {
 // Task 6: Primal-dual interior point method
 class InteriorPointSolver {
 public:
-    InteriorPointSolver() : max_iters_(100), tolerance_(1e-6), mu_(0.1) {}
+    InteriorPointSolver();
+    ~InteriorPointSolver();
     
     LPSolution solve(const LPProblem& problem);
     
+    enum class LinearSolverBackend {
+        AMX,        // Sparse solver (currently unstable)
+        AMXDense,   // Dense solver using LAPACK
+        EigenSparse,
+        EigenDense,
+        Auto
+    };
+
     void set_tolerance(double tol) { tolerance_ = tol; }
-    void set_max_iterations(uint32_t max_it) { max_iters_ = max_it; }
+    void set_max_iterations(uint32_t iters) { max_iters_ = iters; }
+    void set_verbose(bool v) { verbose_ = v; }
+    void set_linear_solver_backend(LinearSolverBackend backend) { 
+        backend_ = backend; 
+        reset_solvers();
+    }
     
+    void reset_solvers();
+
 private:
-    uint32_t max_iters_;
-    double tolerance_;
-    double mu_;  // barrier parameter
+#ifdef __APPLE__
+    struct AMXSolvers;
+    std::unique_ptr<AMXSolvers> amx_solvers_;
+#endif
+    
+    double mu_;            // Barrier parameter
+    double tolerance_;     // Convergence tolerance
+    uint32_t max_iters_;   // Maximum iterations
+    bool verbose_;         // Print status updates
+    LinearSolverBackend backend_ = LinearSolverBackend::Auto;
     
     // Compute Newton step for KKT system
     void compute_newton_step(
@@ -60,6 +83,14 @@ private:
     
     // Line search for step size
     double line_search(
+        const Vector& x,
+        const Vector& s,
+        const Vector& dx,
+        const Vector& ds
+    );
+    
+    double line_search_bounded(
+        const LPProblem& prob,
         const Vector& x,
         const Vector& s,
         const Vector& dx,
