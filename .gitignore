@@ -1,0 +1,12 @@
+# Build artifacts
+build/
+*.o
+optreg
+benchmark
+
+# OS files
+.DS_Store
+
+# Editor
+*.swp
+*~
