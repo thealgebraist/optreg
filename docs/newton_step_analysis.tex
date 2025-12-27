@@ -1,0 +1,137 @@
+\documentclass{article}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{amsthm}
+
+\newtheorem{theorem}{Theorem}
+\newtheorem{proof}{Proof}
+
+\title{Mathematical Analysis: Why Newton Step Fails for Bounded Variables}
+\author{Interior Point Solver Analysis}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\section{Problem Setup}
+
+Consider the simple 2D LP:
+\begin{align*}
+\min_{x,y} \quad & x + y \\
+\text{s.t.} \quad & x + y = 1 \\
+& 0 \le x, y \le 1
+\end{align*}
+
+\section{Interior Point Method with Barrier}
+
+The barrier problem is:
+$$\min_{x,y} \quad f(x,y) = x + y - \mu(\log x + \log y + \log(1-x) + \log(1-y))$$
+subject to $x + y = 1$.
+
+\subsection{KKT Conditions}
+
+The correct KKT system for box-constrained LP is:
+
+\begin{enumerate}
+\item \textbf{Primal feasibility}: $Ax = b \Rightarrow x + y = 1$
+\item \textbf{Dual feasibility}: $c - A^T y - s + z = 0 \Rightarrow \begin{bmatrix}1\\1\end{bmatrix} - \begin{bmatrix}1\\1\end{bmatrix} y - s + z = 0$
+\item \textbf{Lower bound complementarity}: $X S e = \mu e \Rightarrow x_i s_i = \mu$
+\item \textbf{Upper bound complementarity}: $(U - X) Z e = \mu e \Rightarrow (1 - x_i) z_i = \mu$
+\end{enumerate}
+
+where:
+\begin{itemize}
+\item $s \in \mathbb{R}^n$: dual variables for $x \ge 0$
+\item $z \in \mathbb{R}^n$: dual variables for $x \le u$
+\item $X = \text{diag}(x)$, $S = \text{diag}(s)$, $Z = \text{diag}(z)$
+\end{itemize}
+
+\section{Current Implementation Bug}
+
+\textbf{The current code uses only ONE dual variable $s$ and tries to encode both lower and upper bounds into it.}
+
+From \texttt{interior\_point.cpp}:
+\begin{verbatim}
+Vector r_dual = -prob.c + A_sparse.transpose() * y + s;
+r_dual(i) -= mu_ / x(i);           // Lower: -μ/x
+r_dual(i) += mu_ / gap_upper;       // Upper: +μ/(u-x)
+\end{verbatim}
+
+This attempts to solve:
+$$-c + A^T y + s - \frac{\mu}{x} + \frac{\mu}{u-x} = 0$$
+
+\textbf{But this is mathematically incorrect!} The correct formulation needs TWO separate dual variables:
+\begin{align*}
+-c + A^T y + s - z &= 0 \\
+s_i &= \mu / x_i \\
+z_i &= \mu / (u_i - x_i)
+\end{align*}
+
+\section{Why Current Newton Step Fails}
+
+\subsection{Hessian Computation}
+
+Current code (INCORRECT):
+\begin{verbatim}
+H_diag(i) = s(i) / x(i) + mu_ / (gap_upper^2);
+\end{verbatim}
+
+This mixes the dual variable $s$ (which should only correspond to lower bounds) with the upper bound barrier term.
+
+\textbf{Correct Hessian} should be:
+$$H = S X^{-1} + Z (U-X)^{-1}$$
+$$H_{ii} = \frac{\mu}{x_i^2} + \frac{\mu}{(u_i - x_i)^2}$$
+
+\subsection{Reduced System}
+
+For our 2D problem with $A = [1, 1]$:
+
+\textbf{Current (wrong)}:
+$$(A H^{-1} A^T) dy = r_{prim} - A H^{-1} r_{dual}$$
+
+where $H$ incorrectly mixes $s$ with the barrier term, leading to an inconsistent system.
+
+\section{Proof of Failure}
+
+\begin{theorem}
+The current implementation cannot converge for problems with finite upper bounds.
+\end{theorem}
+
+\begin{proof}
+\begin{enumerate}
+\item The dual variable $s$ is initialized from $s = c - A^T y$
+\item The Newton step updates $ds$ via:
+   $$ds(i) = (\mu - s(i) \cdot dx(i)) / x(i) - s(i)$$
+\item This formula assumes $s$ corresponds ONLY to lower bounds: $x \cdot s = \mu$
+\item But the gradient residual includes BOTH $-\mu/x$ and $+\mu/(u-x)$ terms
+\item These two requirements are contradictory: $s$ cannot simultaneously satisfy:
+   \begin{itemize}
+   \item $x_i s_i = \mu$ (lower bound complementarity)
+   \item AND encode information about $(u_i - x_i)$ (upper bound complementarity)
+   \end{itemize}
+\item From lower complementarity: $s_i = \mu/x_i$
+\item From incorrectly using same $s$ for upper: $s_i = \mu/(u_i - x_i)$
+\item These are equal only if: $x_i = u_i - x_i \Rightarrow x_i = u_i/2$
+\item This only holds at the midpoint! For general $x$, the system is overdetermined.
+\end{enumerate}
+Therefore, the KKT system has no solution. $\square$
+\end{proof}
+
+\section{Solution}
+
+Add explicit dual variables $z$ for upper bounds:
+
+\begin{verbatim}
+struct LPSolution {
+    Vector x;    // Primal
+    Vector y;    // Dual for Ax = b
+    Vector s;    // Dual for x ≥ 0
+    Vector z;    // Dual for x ≤ u  [NEW]
+    ...
+};
+\end{verbatim}
+
+Update Newton step to solve the correct 4-block system: $(dx, dy, ds, dz)$ instead of $(dx, dy, ds)$.
+
+\end{document}

@@ -35,7 +35,7 @@ int main() {
     
     InteriorPointSolver solver;
     solver.set_verbose(true);
-    solver.set_max_iterations(100);
+    solver.set_max_iterations(20);  // Reduce for debugging
     solver.set_tolerance(1e-6);
     
     LPSolution sol1 = solver.solve(prob1);

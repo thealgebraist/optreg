@@ -1,11 +1,10 @@
 #include "interior_point.h"
-#include <cmath>
-#include <iostream>
-#include <chrono>
-#include <Eigen/Sparse>
-#include <Eigen/SparseCholesky>
 #include "accelerate_solver.h"
 #include "eigen_solver.h"
+#include <iostream>
+#include <chrono>
+#include <algorithm>
+#include <cmath>
 
 namespace optreg {
     
@@ -45,48 +44,54 @@ LPSolution InteriorPointSolver::solve(const LPProblem& problem) {
         return solution;
     }
     
-    // Initialize primal variables: start at midpoint of bounds
+    // Initialize primal variables at midpoint of bounds
     solution.x.resize(n);
     for (uint32_t i = 0; i < n; ++i) {
         double lower = problem.lower_bound(i);
         double upper = problem.upper_bound(i);
-        
-        // Choose midpoint if both bounds are finite
         if (upper < 1e12) {
             solution.x(i) = 0.5 * (lower + upper);
         } else {
             solution.x(i) = std::max(lower, 0.0) + 1.0;
         }
-        
         // Ensure strictly interior
         if (solution.x(i) <= lower) solution.x(i) = lower + 0.01;
         if (upper < 1e12 && solution.x(i) >= upper) solution.x(i) = upper - 0.01;
     }
     
     solution.y = Vector::Zero(m);
-    solution.s = problem.c - Eigen::MatrixXd(problem.A).transpose() * solution.y;
     
-    // Ensure s > 0 (dual feasibility)
-    for (uint32_t i = 0; i < n; ++i) {
-        if (solution.s(i) <= 0) {
-            solution.s(i) = 1.0;
-        }
+    if (verbose_) {
+        std::cout << "Pure Barrier Method - Initial point:" << std::endl;
+        std::cout << "  x = " << solution.x.transpose() << std::endl;
+        std::cout << "  mu = " << mu_ << std::endl;
     }
     
     // Main interior point loop
     auto last_print_time = std::chrono::steady_clock::now();
     for (uint32_t iter = 0; iter < max_iters_; ++iter) {
-        // Print status approx 2 times/sec
+        // Print status periodically (Pure Barrier - no s,z)
         auto now = std::chrono::steady_clock::now();
-        if (verbose_ && std::chrono::duration_cast<std::chrono::milliseconds>(now - last_print_time).count() >= 500) {
-            double gap = solution.x.dot(solution.s);
-            std::cout << "  Iter " << iter << ": gap=" << gap 
-                      << ", mu=" << mu_ << "\r" << std::flush;
+        if (verbose_ && (iter < 5 || std::chrono::duration_cast<std::chrono::milliseconds>(now - last_print_time).count() >= 500)) {
+            double primal_res = (problem.A * solution.x - problem.b).norm();
+            double grad_norm = 0.0;
+            Vector g = problem.c;
+            for (uint32_t i = 0; i < n; ++i) {
+                double x_lower = solution.x(i) - problem.lower_bound(i);
+                if (x_lower > 1e-10) g(i) -= mu_ / x_lower;
+                if (problem.upper_bound(i) < 1e12) {
+                    double x_upper = problem.upper_bound(i) - solution.x(i);
+                    if (x_upper > 1e-10) g(i) += mu_ / x_upper;
+                }
+            }
+            grad_norm = g.norm();
+            std::cout << "  Iter " << iter << ": mu=" << mu_ 
+                      << ", primal_res=" << primal_res
+                      << ", grad_norm=" << grad_norm << std::endl;
             last_print_time = now;
         }
         
-        // Check convergence
-        if (check_convergence(problem, solution.x, solution.y, solution.s)) {
+        if (check_convergence(problem, solution.x, solution.y)) {
             if (verbose_) {
                 std::cout << "\n  ✓ Converged at iteration " << iter << "\n";
             }
@@ -96,24 +101,21 @@ LPSolution InteriorPointSolver::solve(const LPProblem& problem) {
             return solution;
         }
         
-        // Compute Newton step
-        Vector dx, dy, ds;
-        compute_newton_step(problem, solution.x, solution.y, solution.s, dx, dy, ds);
+        // Compute Newton step (pure barrier - no s, z)
+        Vector dx, dy;
+        compute_newton_step(problem, solution.x, solution.y, dx, dy);
         
-        // Line search for step size (respects upper bounds)
-        double alpha = line_search_bounded(problem, solution.x, solution.s, dx, ds);
+        // Line search
+        double alpha = line_search_bounded(problem, solution.x, dx);
         
         // Update variables
         solution.x += alpha * dx;
         solution.y += alpha * dy;
-        solution.s += alpha * ds;
         
-        // Update barrier parameter
-        double gap = solution.x.dot(solution.s);
-        double mu_new = gap / n / 10.0; // Aggressive decrease
-        // Predictor-corrector heuristic would be better, but simple is robust
-        mu_ = std::min(mu_, mu_new);
-        if (mu_ < 1e-10) mu_ = 1e-10;
+        // Update barrier parameter (pure barrier)
+        // μ should decrease each iteration, NOT depend on "gap"
+        mu_ *= 0.1;  // Decrease by factor of 10 each iteration
+        if (mu_ < 1e-10) mu_ = 1e-10;  // Floor to avoid underflow
     }
     
     // Did not converge
@@ -128,189 +130,137 @@ void InteriorPointSolver::compute_newton_step(
     const LPProblem& prob,
     const Vector& x,
     const Vector& y,
-    const Vector& s,
     Vector& dx,
-    Vector& dy,
-    Vector& ds
+    Vector& dy
 ) {
     uint32_t n = x.size();
     uint32_t m = y.size();
     
-    // Initialize output
     dx = Vector::Zero(n);
     dy = Vector::Zero(m);
-    ds = Vector::Zero(n);
     
     if (n == 0) return;
     
-    // A is already sparse in LPProblem
     const Eigen::SparseMatrix<double>& A_sparse = prob.A;
     
-    // Compute diagonal Hessian: H = S X^{-1} + μ/(U-X)^2 for upper bounds
+    // PURE BARRIER METHOD
+    // Hessian: H = μ/x² + μ/(u-x)² (diagonal)
     Vector H_diag(n);
     for (uint32_t i = 0; i < n; ++i) {
-        double h_lower = s(i) / x(i);
+        double x_lower = x(i) - prob.lower_bound(i);
+        double h_lower = (x_lower > 1e-10) ? mu_ / (x_lower * x_lower) : 1e10;
+        
         double h_upper = 0.0;
-        
-        // Add upper bound barrier term if upper bound is finite
         if (prob.upper_bound(i) < 1e12) {
-            double gap_upper = prob.upper_bound(i) - x(i);
-            if (gap_upper > 1e-10) {
-                h_upper = mu_ / (gap_upper * gap_upper);
-            } else {
-                h_upper = 1e10; // Large penalty if too close to bound
-            }
+            double x_upper = prob.upper_bound(i) - x(i);
+            h_upper = (x_upper > 1e-10) ? mu_ / (x_upper * x_upper) : 1e10;
         }
         
-        H_diag(i) = h_lower + h_upper + 1e-8; 
+        H_diag(i) = h_lower + h_upper + 1e-8;
     }
     
-    // Right-hand side with lower and upper bound barrier gradients
-    Vector r_dual = -prob.c + A_sparse.transpose() * y + s;
+    // Gradient: g = c - μ/(x-l) + μ/(u-x)  
+    Vector g = prob.c;
     for (uint32_t i = 0; i < n; ++i) {
-        // Lower bound barrier: -μ/x
-        r_dual(i) -= mu_ / x(i);
+        double x_lower = x(i) - prob.lower_bound(i);
+        if (x_lower > 1e-10) {
+            g(i) -= mu_ / x_lower;
+        }
         
-        // Upper bound barrier: μ/(u - x)
         if (prob.upper_bound(i) < 1e12) {
-            double gap_upper = prob.upper_bound(i) - x(i);
-            if (gap_upper > 1e-10) {
-                r_dual(i) += mu_ / gap_upper;
+            double x_upper = prob.upper_bound(i) - x(i);
+            if (x_upper > 1e-10) {
+                g(i) += mu_ / x_upper;
             }
         }
     }
     
-    Vector r_prim = -(A_sparse * x - prob.b);
+    // Newton-KKT system (Pure Barrier - matches Agda):
+    // [H   A^T] [dx] = [-∇f      ]
+    // [A    0 ] [dy]   [b - Ax   ]
+    // where ∇f = g (already computed gradient)
     
-    // Solve reduced system: (A H^{-1} A^T) dy = r_prim - A H^{-1} r_dual
+    Vector r_dual = -g;  // RHS for dual block: just negative gradient
+    Vector r_prim = prob.b - A_sparse * x;  // RHS for primal block
+    
+    // Solve via Schur complement: (A H^{-1} A^T) dy = r_prim + A H^{-1} r_dual
     if (m > 0) {
         Vector H_inv_diag = H_diag.cwiseInverse();
         
-        // Form A H^{-1} A^T efficiently using sparse operations
-        // D is H_inv_diag
-        // Scale columns of A by D
+        // Scale A by H^{-1}
         Eigen::SparseMatrix<double> A_scaled = A_sparse;
-        for (int k=0; k < A_scaled.outerSize(); ++k) {
+        for (int k = 0; k < A_scaled.outerSize(); ++k) {
             for (Eigen::SparseMatrix<double>::InnerIterator it(A_scaled, k); it; ++it) {
                 it.valueRef() *= H_inv_diag(it.col());
             }
         }
         
-        // AHA = A * H^{-1} * A^T
         Eigen::SparseMatrix<double> AHA = A_scaled * A_sparse.transpose();
-        
-        // Add small regularization for stability
         for (int i = 0; i < AHA.rows(); ++i) {
             AHA.coeffRef(i, i) += 1e-9;
         }
         
-        Vector rhs = r_prim - A_scaled * r_dual;
+        Vector rhs = r_prim + A_scaled * r_dual;
         
+        // Try solvers
         bool solved = false;
         
-        // Strategy Selection
-        bool try_amx_sparse = (backend_ == LinearSolverBackend::AMX);
-        bool try_amx_dense = (backend_ == LinearSolverBackend::Auto || backend_ == LinearSolverBackend::AMXDense);
-        bool try_eigen = (backend_ == LinearSolverBackend::Auto || backend_ == LinearSolverBackend::EigenSparse);
-        bool try_dense = (backend_ == LinearSolverBackend::Auto || backend_ == LinearSolverBackend::EigenDense);
-        
 #ifdef __APPLE__
-        if (try_amx_dense && !solved) {
+        if (backend_ == LinearSolverBackend::AMXDense || backend_ == LinearSolverBackend::Auto) {
             Eigen::MatrixXd AHA_dense = Eigen::MatrixXd(AHA);
             if (amx_solvers_->dense.solve(AHA_dense, rhs, dy)) {
                 solved = true;
             }
         }
-
-        if (try_amx_sparse && !solved) {
+        
+        if (!solved && (backend_ == LinearSolverBackend::AMX || backend_ == LinearSolverBackend::Auto)) {
             if (amx_solvers_->sparse.solve(AHA, rhs, dy, true)) {
-                 solved = true;
+                solved = true;
             }
         }
 #endif
-
-        if (try_eigen && !solved) {
+        
+        if (!solved) {
             EigenSparseSolver eigen_solver;
             eigen_solver.set_verbose(verbose_);
             if (eigen_solver.solve(AHA, rhs, dy)) {
                 solved = true;
+            } else {
+                Eigen::MatrixXd AHA_dense = Eigen::MatrixXd(AHA);
+                dy = AHA_dense.fullPivLu().solve(rhs);
+                solved = true;
             }
         }
         
-        // Dense Solver Logic
-        // In Auto mode, EigenSparseSolver falls back to Dense QR internally.
-        // But if explicitly set to EigenDense, or if backend forced, we do it here.
-        if (try_dense && !solved) {
-             if(verbose_) std::cout << "  (Using Dense methods) ";
-             Eigen::MatrixXd AHA_dense = Eigen::MatrixXd(AHA);
-             dy = AHA_dense.fullPivLu().solve(rhs); // Full pivoting LU for stability
-             solved = true; 
-        }
-        
-        if (!solved && verbose_) std::cout << " [ALL SOLVERS FAILED] ";
-
-        // Back-substitute for dx
         if (solved) {
             dx = H_inv_diag.asDiagonal() * (r_dual - A_sparse.transpose() * dy);
         }
-        
     } else {
-        // No constraints
         dy = Vector::Zero(0);
-        dx = (s.cwiseProduct(x.cwiseInverse())).cwiseInverse().cwiseProduct(r_dual);
+        dx = H_diag.cwiseInverse().cwiseProduct(r_dual);
     }
-    
-    // ds computation remains same
-    for (uint32_t i = 0; i < n; ++i) {
-        ds(i) = (mu_ - s(i) * dx(i)) / x(i) - s(i);
-    }
-}
-
-double InteriorPointSolver::line_search(
-    const Vector& x,
-    const Vector& s,
-    const Vector& dx,
-    const Vector& ds
-) {
-    double alpha = 1.0;
-    
-    // Find maximum step that keeps x, s > 0
-    for (int i = 0; i < x.size(); ++i) {
-        if (dx(i) < 0) {
-            alpha = std::min(alpha, -0.95 * x(i) / dx(i));
-        }
-        if (ds(i) < 0) {
-            alpha = std::min(alpha, -0.95 * s(i) / ds(i));
-        }
-    }
-    
-    return std::max(alpha, 1e-8);
 }
 
 // Add method to also check upper bounds
 double InteriorPointSolver::line_search_bounded(
     const LPProblem& prob,
     const Vector& x,
-    const Vector& s,
-    const Vector& dx,
-    const Vector& ds
+    const Vector& dx
 ) {
     double alpha = 1.0;
     
-    // Find maximum step that keeps x, s > 0 and x < u
+    // Keep x strictly interior: l < x < u
     for (int i = 0; i < x.size(); ++i) {
+        // Lower bound: x + α·dx > l
         if (dx(i) < 0) {
-            alpha = std::min(alpha, -0.95 * x(i) / dx(i));
+            double max_step = (x(i) - prob.lower_bound(i)) / (-dx(i));
+            alpha = std::min(alpha, 0.99 * max_step);
         }
-        if (ds(i) < 0) {
-            alpha = std::min(alpha, -0.95 * s(i) / ds(i));
-        }
-        // Upper bound check
+        
+        // Upper bound: x + α·dx < u
         if (dx(i) > 0 && prob.upper_bound(i) < 1e12) {
-            double gap = prob.upper_bound(i) - x(i);
-            if (gap > 0) {
-                alpha = std::min(alpha, 0.95 * gap / dx(i));
-            }
+            double max_step = (prob.upper_bound(i) - x(i)) / dx(i);
+            alpha = std::min(alpha, 0.99 * max_step);
         }
     }
     
@@ -320,24 +270,14 @@ double InteriorPointSolver::line_search_bounded(
 bool InteriorPointSolver::check_convergence(
     const LPProblem& prob,
     const Vector& x,
-    const Vector& y,
-    const Vector& s
+    const Vector& y
 ) {
-    // Check KKT conditions:
-    // 1. Primal feasibility: ||Ax - b|| < tol
-    Vector residual_primal = prob.A * x - prob.b;
-    double primal_norm = residual_primal.norm();
+    // Barrier method: converge when μ → 0 and constraints satisfied
+    // NOTE: Gradient norm is NOT a valid criterion! 
+    // At optimum, ∇f → c (original objective gradient) as μ → 0
+    double primal_res = (prob.A * x - prob.b).norm();
     
-    // 2. Dual feasibility: ||s - c + A^T y|| < tol
-    Vector residual_dual = s - prob.c + prob.A.transpose() * y;
-    double dual_norm = residual_dual.norm();
-    
-    // 3. Complementarity: |x^T s| < tol
-    double gap = std::abs(x.dot(s));
-    
-    return (primal_norm < tolerance_) && 
-           (dual_norm < tolerance_) && 
-           (gap < tolerance_);
+    return mu_ < tolerance_ && primal_res < tolerance_;
 }
 
 } // namespace optreg

@@ -25,8 +25,8 @@ struct LPProblem {
 
 struct LPSolution {
     Vector x;           // primal variables
-    Vector y;           // dual variables (equality)
-    Vector s;           // dual slack variables
+    Vector y;           // dual variables (equality constraints)
+    // Note: s, z removed - computed implicitly from barrier: s = μ/x, z = μ/(u-x)
     double objective;   // objective value
     bool optimal;       // convergence flag
     uint32_t iterations;
@@ -75,34 +75,26 @@ private:
         const LPProblem& prob,
         const Vector& x,
         const Vector& y,
-        const Vector& s,
         Vector& dx,
-        Vector& dy,
-        Vector& ds
+        Vector& dy
     );
     
-    // Line search for step size
     double line_search(
         const Vector& x,
-        const Vector& s,
-        const Vector& dx,
-        const Vector& ds
+        const Vector& dx
     );
     
     double line_search_bounded(
         const LPProblem& prob,
         const Vector& x,
-        const Vector& s,
-        const Vector& dx,
-        const Vector& ds
+        const Vector& dx
     );
     
     // Check KKT conditions
     bool check_convergence(
         const LPProblem& prob,
         const Vector& x,
-        const Vector& y,
-        const Vector& s
+        const Vector& y
     );
 };
 
