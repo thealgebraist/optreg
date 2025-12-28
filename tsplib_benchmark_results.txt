@@ -1,0 +1,16 @@
+========================================
+TSPLIB Benchmark: Optimized B&B
+Testing all instances (n ≤ 25)
+========================================
+
+Instance         N   Cost    Nodes     Time   Status
+--------------- --- ------- -------- -------- ------
+
+========================================
+Summary:
+  Tested:   0
+  Solved:   0 (0%)
+  Timeout:  0
+========================================
+
+Optimized B&B with 4 Agda-proven fixes!

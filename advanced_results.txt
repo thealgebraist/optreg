@@ -1,0 +1,33 @@
+========================================
+Advanced TSP B&B (from tspsolve.md)
+1-Tree Bounds + Cutting Planes
+========================================
+
+Instance         N   Heur    BB      Nodes    Time
+--------------- --- ------- ------- -------- -------
+
+berlin52.tsp:
+  Root LB (Held-Karp): 6172
+  Initial UB (heuristic): 8194
+  Gap: 2022 (24.6766%)
+  Cuts added: 0
+berlin52.tsp     52    8194    8194  1000001  17.49s
+
+eil51.tsp:
+  Root LB (Held-Karp): 385
+  Initial UB (heuristic): 450
+  Gap: 65 (14.4444%)
+  Cuts added: 0
+eil51.tsp        51     450     450  1000001  13.73s
+
+eil76.tsp:
+  Root LB (Held-Karp): 473
+  Initial UB (heuristic): 575
+  Gap: 102 (17.7391%)
+  Cuts added: 0
+eil76.tsp        76     575     575   780413  31.00s
+
+kroA100.tsp:
+  Root LB (Held-Karp): 19094
+  Initial UB (heuristic): 22855
+  Gap: 3761 (16.4559%)

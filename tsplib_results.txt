@@ -1,0 +1,28 @@
+========================================
+TSPLIB Benchmark: Optimized B&B
+Testing all instances (n ≤ 25)
+========================================
+
+Instance         N   Cost    Nodes     Time   Status
+--------------- --- ------- -------- -------- ------
+berlin52         52    8980 10000001    5.08s TIMEOUT
+eil51            51     511 10000001    4.97s TIMEOUT
+eil76            76     642 10000001    6.53s TIMEOUT
+kroA100         100   27807 10000001    7.93s TIMEOUT
+kroB100         100   29158 10000001    7.84s TIMEOUT
+kroC100         100   26227 10000001    7.76s TIMEOUT
+kroD100         100   26947 10000001    7.78s TIMEOUT
+kroE100         100   27460 10000001    7.87s TIMEOUT
+pr76             76  150781 10000001    6.61s TIMEOUT
+rat99            99    1554 10000001    8.08s TIMEOUT
+rd100           100    9938 10000001    8.00s TIMEOUT
+st70             70     830 10000001    6.08s TIMEOUT
+
+========================================
+Summary:
+  Tested:   12
+  Solved:   0 (0%)
+  Timeout:  12
+========================================
+
+Optimized B&B with 4 Agda-proven fixes!
