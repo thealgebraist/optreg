@@ -13,7 +13,6 @@ LPSolution GradientDescentSolver::solve(const LPProblem& problem) {
     solution.x = Vector::Ones(n);
     // GD formulation doesn't use dual vars y, s explicitly in update
     solution.y = Vector::Zero(m);
-    solution.s = Vector::Zero(n);
     
     // Convert A to dense for simplicity in this baseline benchmark
     Eigen::MatrixXd A = Eigen::MatrixXd(problem.A);
