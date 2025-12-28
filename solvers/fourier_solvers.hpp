@@ -1,6 +1,7 @@
 #pragma once
 #include "solver_base.hpp"
 #include "problem_types.hpp"
+#include "coloring_solvers.hpp"
 #include <vector>
 #include <complex>
 #include <cmath>

@@ -104,12 +104,12 @@ int main() {
     csv << "problem,id,cost,fft_c1,fft_c2,fft_c3,fft_c4,spec_lambda2,spec_gap\n";
     
     // 1. TSP Optimal FFT Analysis
-    // N=20 allows fast Branch & Bound
-    std::cout << "Analyzing TSP Optimal Tours (N=20)...\n";
+    // N=12 allows VERY fast Branch & Bound (instant)
+    std::cout << "Analyzing TSP Optimal Tours (N=12) (4096 instances)...\n";
     TSPBranchBound tsp_bnb;
     
-    for(int i=0; i<128; ++i) {
-        TSPProblem p = TSPProblem::random(20, i);
+    for(int i=0; i<4096; ++i) {
+        TSPProblem p = TSPProblem::random(12, i);
         auto sol = tsp_bnb.solve(p);
         
         // Construct Tour Signal z[n]
@@ -136,12 +136,12 @@ int main() {
     }
     
     // 2. Coloring Optimal Spectral Analysis
-    // N=20
-    std::cout << "Analyzing Coloring Optimal Solutions (N=20) (using DSatur proxy)...\n";
+    // N=12
+    std::cout << "Analyzing Coloring Optimal Solutions (N=12) (using DSatur proxy)...\n";
     ColoringDSATUR col_bnb;
     
-    for(int i=0; i<128; ++i) {
-        GraphColoringProblem p = GraphColoringProblem::random(20, 0.3, i+1000);
+    for(int i=0; i<4096; ++i) {
+        GraphColoringProblem p = GraphColoringProblem::random(12, 0.3, i+1000);
         auto sol = col_bnb.solve(p);
         
         // Compute Eigenvalues of Adjacency Matrix

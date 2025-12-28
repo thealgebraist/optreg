@@ -69,13 +69,35 @@ public:
     
 protected:
     bool solve_impl(const TSPProblem& problem, TSPSolution& solution, SolverMetrics& metrics) override {
-        size_t n = problem.n_cities;
-        
         // Start with nearest neighbor solution
         TSPNearestNeighbor nn;
         auto nn_result = nn.solve(problem);
         solution = nn_result.solution;
         
+        refine_tour(problem, solution, metrics);
+        return true;
+    }
+
+    // Public method to refine an existing tour
+public:
+    TSPSolution solve_from_tour(const TSPProblem& problem, const std::vector<size_t>& initial_tour) {
+        TSPSolution solution;
+        solution.tour = initial_tour;
+        // Recalculate distance
+        solution.total_distance = 0;
+        size_t n = initial_tour.size();
+        for (size_t i = 0; i < n; ++i) {
+            solution.total_distance += problem.distances[initial_tour[i]][initial_tour[(i + 1) % n]];
+        }
+        
+        SolverMetrics metrics;
+        refine_tour(problem, solution, metrics);
+        return solution;
+    }
+
+private:
+    void refine_tour(const TSPProblem& problem, TSPSolution& solution, SolverMetrics& metrics) {
+        size_t n = problem.n_cities;
         bool improved = true;
         size_t iterations = 0;
         const size_t max_iter = 1000;
@@ -95,15 +117,12 @@ protected:
                     }
                 }
             }
-            
             iterations++;
         }
         
         metrics.iterations = iterations;
         metrics.objective_value = solution.total_distance;
         metrics.is_optimal = false;
-        
-        return true;
     }
     
 private:
