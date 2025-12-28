@@ -82,6 +82,9 @@ private:
         
         if (std::find(blockElements.begin(), blockElements.end(), node.tag) != blockElements.end()) {
             style.display = ComputedStyle::Block;
+        } else if (node.tag == "td" || node.tag == "th") {
+            // Table cells behave like InlineBlock in simplified model (shrink-to-fit, side-by-side)
+            style.display = ComputedStyle::InlineBlock;
         } else {
             style.display = ComputedStyle::Inline;
         }
@@ -195,6 +198,12 @@ private:
         else if (decl.property == "padding-left") {
             style.padding.left = parsePx(decl.value).value_or(0);
         }
+        else if (decl.property == "float") {
+            if (decl.value == "left" || decl.value == "right") {
+                // Simplified Engine: Treat float as InlineBlock to enforce shrink-to-fit
+                style.display = ComputedStyle::InlineBlock;
+            }
+        }
         else if (decl.property == "background-color" || decl.property == "background") {
             style.background_color = parseColor(decl.value);
         }
@@ -220,10 +229,23 @@ private:
     }
     
     static void inheritStyles(const ComputedStyle& parent, ComputedStyle& child) {
-        // Inherit text color and font properties
+        // Inherit text color
         if (child.text_color.r == 255 && child.text_color.g == 255 && child.text_color.b == 255) {
             child.text_color = parent.text_color;
         }
+        
+        // Inherit font properties
+        // For text nodes (or any child really, unless overridden), font size/weight should inherit.
+        // Simple logic: if child has default "16px" and parent has something else, use parent?
+        // Better: Always overwrite if it's a Text node? 
+        // Text nodes don't accept classes so they can't override via CSS rules (except inline logic which we don't have on text nodes).
+        // Since StyleEngine sets defaults first, we need to know if it was *explicitly* set?
+        // For now, let's just copy parent's font properties to child.
+        // In a real engine, we'd handle the cascade better (only inherit if not specified).
+        // But since Text nodes are generated and have no selectors, they rely 100% on inheritance.
+        
+        child.font_size = parent.font_size;
+        child.font_weight = parent.font_weight;
     }
     
     static std::optional<int> parsePx(const std::string& value) {

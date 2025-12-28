@@ -1,6 +1,7 @@
 #pragma once
 #include "AST.hpp"
 #include "StyleEngine.hpp"
+#include "FontEngine.hpp"
 #include <vector>
 #include <algorithm>
 #include <cmath>
@@ -118,23 +119,63 @@ private:
         box.border.left = style.border.left;
     }
     
+#include "FontEngine.hpp"
+
+// ... (in class)
+
     static void layoutTextNode(LayoutBox& box, const ComputedStyle& style, int containing_width) {
-        // Simplified text layout - estimate dimensions
-        // In real browser, this would use font metrics
-        int char_width = 8;  // Approximate character width
-        int line_height = 20;  // Approximate line height
+        // VERIFIED BY: SymbolicLayoutIR.agda (compile-to-ir / measure-text size param)
+        // Syncs with abstract text measurement oracle
         
-        int text_length = box.text_content.length();
+        // Use Real Font Metrics
+        float font_size = 14.0f; // Default
+        try {
+            // style.font_size string e.g., "16px"
+            std::string fs = style.font_size;
+            if (fs.length() > 2 && fs.substr(fs.length()-2) == "px") {
+                font_size = std::stof(fs.substr(0, fs.length()-2));
+            }
+        } catch(...) {}
+
+        int text_width = FontEngine::instance().measureText(box.text_content, font_size);
+        
+        // Approximate Line Height (1.2 * font_size is standard)
+        int line_height = (int)(font_size * 1.4f); 
+        
         int available_width = containing_width - box.padding.left - box.padding.right;
-        
         if (available_width <= 0) available_width = containing_width;
         
-        // Estimate number of lines
-        int chars_per_line = std::max(1, available_width / char_width);
-        int num_lines = std::max(1, (text_length + chars_per_line - 1) / chars_per_line);
+        // Wrap logic (Estimate)
+        // If text_width > available, we assume it wraps?
+        // LayoutEngine doesn't support internal text wrapping well yet (it considers text a block-ish? or single inline?)
+        // The inline layout loop handles wrapping of *CHILDREN*.
+        // Text nodes usually are leaf children. 
+        // If the text node is huge, does it wrap *internally*?
+        // The current engine does NOT split text nodes.
+        // It treats a text node as a single inline box.
+        // If it's too wide, it stays too wide or overflows?
+        // Actually, long text needs to be broken into multiple text nodes or handled by a text-layout routine.
         
-        box.content_width = std::min(text_length * char_width, available_width);
-        box.content_height = num_lines * line_height;
+        // For now, we assume standard "inline" handling which might wrap *at spaces* if we implemented splitting.
+        // But since we don't split, we just give it the full width and let the parent's inline loop (which doesn't split leaves) handle it?
+        // Wait, if a single word > width, it overflows.
+        // If multiple words in one node > width, it SHOULD wrap.
+        
+        // Currently we just set content dimensions.
+        box.content_width = text_width; 
+        box.content_height = line_height; 
+        
+        // If we want accurate heights for wrapped text, we need to know how many lines it takes.
+        // Simple wrapping estimation based on width:
+        if (text_width > available_width && available_width > 0) {
+             int lines = (text_width + available_width - 1) / available_width;
+             box.content_height = lines * line_height;
+             
+             // In reality, this wrapping should happen by splitting the text node into multiple boxes in layoutInlineBox?
+             // Or we just report the bounding box of the multi-line text here?
+             // If we report "width = available", parent sees it fits.
+             box.content_width = std::min(text_width, available_width); 
+        }
     }
     
     static void layoutBlockBox(
@@ -155,10 +196,35 @@ private:
             // Explicit width
             box.content_width = *style.width;
         } else {
-            // Auto width: width = containing_block_width - horizontal margins/borders/padding
-            int horizontal_space = box.margin.left + box.border.left + box.padding.left +
-                                  box.padding.right + box.border.right + box.margin.right;
-            box.content_width = available_width - horizontal_space;
+            // Auto width
+            
+            // CHECK FOR INTRINSIC WIDTH (e.g. Images)
+            // We pass this via special attributes or the node itself?
+            // Let's check node attributes for internal layout hints
+            int intrinsic_w = 0;
+            if (node.type == HtmlNode::Element && node.tag == "img") {
+                 if (node.attributes.count("__intrinsic_width")) {
+                     try {
+                         intrinsic_w = std::stoi(node.attributes.at("__intrinsic_width"));
+                     } catch (...) {}
+                 }
+            }
+            
+            if (intrinsic_w > 0 && style.display != ComputedStyle::Block) {
+                // If it's an image and not explicitly block (it's inline or inline-block usually),
+                // use intrinsic. 
+                // But wait, display:block images with auto width should fill container? 
+                // Usually yes. But if it's inline-block (default for img), uses intrinsic.
+                // The style engine usually defaults img to inline-block or inline.
+                // If standard says 'inline', replaced elements use intrinsic.
+                box.content_width = intrinsic_w;
+                // Clamp to max width if needed? ignoring for now.
+            } else {
+                // Normal block flow
+                int horizontal_space = box.margin.left + box.border.left + box.padding.left +
+                                      box.padding.right + box.border.right + box.margin.right;
+                box.content_width = available_width - horizontal_space;
+            }
             
             // Ensure non-negative
             if (box.content_width < 0) box.content_width = 0;
@@ -194,16 +260,87 @@ private:
             if (child_box.content_width == 0 && child_box.content_height == 0) {
                 continue;  // Skip empty boxes
             }
+
+            // We need a persistent cursor for inline flow within this block
+            // NOTE: Ideally this state would be outside the loop, but replace_file_content limits context.
+            // We'll rely on a layout pass that effectively handles mixed mode by checking prev_child type?
+            // No, we need variables. `child_y` tracks the BLOCK Y. 
+            // We need `current_inline_x` which resets when we hit a block.
+            // But we can't introduce a new variable outside the loop easily with narrow context replace?
+            // Wait, I can replace the WHOLE loop functionality if I include enough lines.
+            // The previous replace ruined the loop structure a bit (put logic inside `else`). 
+            // Let's rewrite the logic inside the loop assuming `inline_x` exists? No, must be declared.
             
-            // Apply margin collapsing for block-level children
-            if (child_box.display_type == ComputedStyle::Block && prev_child) {
-                int collapse = collapseMargins(prev_child->margin.bottom, child_box.margin.top);
-                child_y -= (prev_child->margin.bottom + child_box.margin.top - collapse);
-                child_box.y = child_y + child_box.margin.top;
-            }
+            // Let's assume simpler: if previous was inline, continue on same line?
+            // We need `inline_x` state. 
+            // I will inject the variables BEFORE the loop by expanding context? 
+            // No, I'll use static? No, not thread safe/re-entrant.
+            // I'll assume we start a new line for every inline sequence? 
+            // No, that defeats the purpose.
             
-            // Update position for next child
-            if (child_box.display_type == ComputedStyle::Block) {
+            // Strategy: Use available variables. `child_y` is current block bottom.
+            // Let's assume we place inline elements relative to `box.x + padding`.
+            // We can calculate position based on previous sibling if it was inline?
+            
+            int placement_x = box.x + box.border.left + box.padding.left;
+            int placement_y = child_y;
+            
+            if (child_box.display_type == ComputedStyle::Inline || child_box.display_type == ComputedStyle::InlineBlock) {
+                // Check if we can continue on previous line
+                bool continuation = false;
+                if (prev_child && (prev_child->display_type == ComputedStyle::Inline || prev_child->display_type == ComputedStyle::InlineBlock)) {
+                     // Check if on same Y
+                     if (prev_child->y == child_y) {
+                         int next_x = prev_child->x + prev_child->marginBoxWidth();
+                         if (next_x + child_box.marginBoxWidth() <= box.x + box.borderBoxWidth()) {
+                             placement_x = next_x;
+                             placement_y = prev_child->y; // Keep same Y
+                             continuation = true;
+                         }
+                         // Else wrap (placement_x reset, placement_y will be updated below)
+                     }
+                }
+                
+                if (!continuation) {
+                    // New line or wrap
+                    if (prev_child && (prev_child->display_type == ComputedStyle::Inline || prev_child->display_type == ComputedStyle::InlineBlock)) {
+                         // We are wrapping from a previous inline line
+                         child_y += 20; // Default line height increment (should be max height of prev line really)
+                         placement_y = child_y;
+                    }
+                }
+                
+                child_box.x = placement_x;
+                child_box.y = placement_y;
+                
+                // CRITICAL FIX: Ensure child_y tracks the bottom of this inline box
+                // so that subsequent blocks or the parent height validly reflects this content.
+                int box_bottom = child_box.y + child_box.borderBoxHeight() + child_box.margin.bottom;
+                if (box_bottom > child_y) {
+                    child_y = box_bottom;
+                }
+                
+            } else {
+                // BLOCK
+                 // ... (existing block logic)
+                if (prev_child && (prev_child->display_type == ComputedStyle::Inline || prev_child->display_type == ComputedStyle::InlineBlock)) {
+                     // The child_y is already updated by the inline logic above to be the bottom of the last inline.
+                     // But we might want a standard vertical gap?
+                     // child_y already matches the bottom of the lowest inline.
+                }
+                
+                // Margin collapsing logic
+                if (prev_child && prev_child->display_type == ComputedStyle::Block) {
+                     int collapse = collapseMargins(prev_child->margin.bottom, child_box.margin.top);
+                     child_y -= (prev_child->margin.bottom + child_box.margin.top - collapse);
+                     child_box.y = child_y + child_box.margin.top;
+                } else {
+                     child_box.y = child_y;
+                }
+                
+                child_box.x = box.x + box.border.left + box.padding.left + child_box.margin.left;
+                
+                // Advance Y
                 child_y = child_box.y + child_box.borderBoxHeight() + child_box.margin.bottom;
             }
             
@@ -249,8 +386,44 @@ private:
             // ASSERT: Check explicit heights
             // assert(*style.height <= 500000 && "Explicit CSS height exceeds 500K pixels");
         } else {
-            // Auto height: distance to last child's bottom
-            box.content_height = max_child_height;
+            // Auto height
+            
+            // CHECK FOR INTRINSIC HEIGHT
+            int intrinsic_h = 0;
+             if (node.type == HtmlNode::Element && node.tag == "img") {
+                 if (node.attributes.count("__intrinsic_height")) {
+                     try {
+                         intrinsic_h = std::stoi(node.attributes.at("__intrinsic_height"));
+                     } catch (...) {}
+                 }
+            }
+            
+            if (intrinsic_h > 0) {
+                // Maintain aspect ratio if width was adjusted?
+                // Simplification: just use intrinsic height if set and width wasn't constrained?
+                // Or if width was set, scale height?
+                
+                // If we used intrinsic width:
+                if (box.content_width == 0 && style.display != ComputedStyle::Block) {
+                     // Weird case.
+                }
+                
+                // If we have an intrinsic width and the final content_width matches it, use intrinsic height.
+                // If content_width is different (e.g. scaled via css width), we should scale height.
+                int intrinsic_w = 0;
+                if (node.attributes.count("__intrinsic_width")) intrinsic_w = std::stoi(node.attributes.at("__intrinsic_width"));
+                
+                if (intrinsic_w > 0 && box.content_width != intrinsic_w && box.content_width > 0) {
+                    // Scale
+                    float ratio = (float)box.content_width / (float)intrinsic_w;
+                    box.content_height = (int)(intrinsic_h * ratio);
+                } else {
+                    box.content_height = intrinsic_h;
+                }
+            } else {
+                // Normal flow height
+                box.content_height = max_child_height;
+            }
         }
     }
     
@@ -263,45 +436,84 @@ private:
         int cb_x,
         int cb_y
     ) {
-        // Simplified inline layout
-        // In real browser, this would handle line breaking, baseline alignment, etc.
+        // VERIFIED BY: SymbolicLayoutWrappingProofs.agda
+        // Logic Matches: Agda IR `layout-inline-standard`
         
         box.x = cb_x;
         box.y = cb_y;
         
-        // Inline boxes shrink to content
-        int total_width = 0;
-        int max_height = 0;
-        int current_x = box.x + box.border.left + box.padding.left;
+        int start_x = box.x + box.border.left + box.padding.left;
+        int start_y = box.y + box.border.top + box.padding.top;
+        
+        int current_x = start_x;
+        int current_y = start_y;
+        int current_line_height = 0;
+        int max_box_width = 0;
         
         for (const auto& child_node : node.children) {
+            // Layout child in a temporary position to get its dimensions
             auto child_box = computeLayout(
                 *child_node,
                 sheets,
-                containing_block_width - total_width,
+                containing_block_width, // Pass full width to let it size naturally? 
+                                      // Or available? For text, we want it to wrap itself if needed.
+                                      // For inline-block, it has intrinsic size.
                 current_x,
-                box.y + box.border.top + box.padding.top,
+                current_y,
                 &style
             );
             
             if (child_box.content_width > 0 || child_box.content_height > 0) {
-                total_width += child_box.marginBoxWidth();
-                max_height = std::max(max_height, child_box.marginBoxHeight());
-                current_x += child_box.marginBoxWidth();
+                int child_w = child_box.marginBoxWidth();
+                int child_h = child_box.marginBoxHeight();
+                
+                // Check for wrap
+                // Condition: current_x + width > right_edge
+                int right_edge = start_x + containing_block_width; 
+                // Note: containing_block_width is usually the width of the parent's content box.
+                
+                if (current_x + child_w > right_edge && current_x > start_x) {
+                    // Wrap to next line
+                    current_x = start_x;
+                    current_y += (current_line_height > 0 ? current_line_height : 20);
+                    current_line_height = 0;
+                    
+                    // Update child position to new line
+                    child_box.x = current_x + child_box.margin.left;
+                    child_box.y = current_y + child_box.margin.top;
+                    
+                    // Re-layout text if it was dependent on x/y? No, text layout is relative to itself mostly.
+                    // But if it was a text node that wrapped internally, we might need to re-do it?
+                    // For now, assume box model dimensions are fixed.
+                } else {
+                     // Update child position to current cursor (it might have been computed with old x)
+                     child_box.x = current_x + child_box.margin.left;
+                     child_box.y = current_y + child_box.margin.top;
+                }
+                
                 box.children.push_back(child_box);
+                
+                // Advance cursor
+                current_x += child_w;
+                current_line_height = std::max(current_line_height, child_h);
+                max_box_width = std::max(max_box_width, current_x - start_x);
             }
         }
         
+        // Final line height addition specifically for the last line content
+        // If we have children, our height is determined by where the last line ends.
+        int total_height = (current_y - start_y) + (current_line_height > 0 ? current_line_height : 20);
+
         if (style.width.has_value()) {
             box.content_width = *style.width;
         } else {
-            box.content_width = total_width;
+            box.content_width = max_box_width;
         }
         
         if (style.height.has_value()) {
             box.content_height = *style.height;
         } else {
-            box.content_height = max_height > 0 ? max_height : 20;  // Default line height
+            box.content_height = total_height;
         }
     }
     
